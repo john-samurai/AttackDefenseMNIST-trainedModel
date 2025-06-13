@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
 import numpy as np
+import os
 
 # ==========================================
 # TARGET MODEL (BANK'S Hand-Written Recognition SYSTEM) (mnist_cnn.pt)
@@ -17,7 +18,7 @@ class BankProprietaryModel(nn.Module):
     The attacker has NO ACCESS to this code.
 
     BankProprietaryModel is the "Container" (neural network structure)
-    mnist_cnn.pt is the "brain" (trained weights/knowledge)
+    mnist_cnn.pt is the "Brain" (trained weights/knowledge)
     """
     def __init__(self):
         super(BankProprietaryModel, self).__init__()
@@ -73,7 +74,7 @@ class BankCheckProcessingAPI:
         # Step 3: Now it's a complete, working model
         self._secret_model.eval()
         
-        print("Bank's proprietary model loaded successfully!")
+        print("Bank's proprietary model loaded successfully.")
         print("Model architecture is confidential and not accessible to clients.")
         
     def process_check_digit(self, digit_image):
@@ -268,7 +269,7 @@ class ModelExtractionAttacker:
         """
         print(f"\nATTACKER: Training surrogate model...")
         print(f"Chosen architecture: {architecture_choice}")
-        print("Attacker doesn't know if this matches the bank's architecture!")
+        print("Attacker doesn't know if this matches the bank's architecture.")
         
         # Create surrogate model with attacker's chosen architecture
         self.surrogate_model = AttackerSurrogateModel(architecture_choice)
@@ -296,7 +297,48 @@ class ModelExtractionAttacker:
             print(f"Epoch {epoch+1}/10, Loss: {epoch_loss/len(dataloader):.4f}")
         
         self.surrogate_model.eval()
-        print("Surrogate model training completed!")
+        print("Surrogate model training completed.")
+        
+        # NEW: Save the attacker's trained surrogate model
+        self.save_surrogate_model(architecture_choice)
+        
+    def save_surrogate_model(self, architecture_choice):
+        """
+        Save the attacker's trained surrogate model to a .pt file
+        """
+        # Create stolen_models directory if it doesn't exist
+        if not os.path.exists('stolen_models'):
+            os.makedirs('stolen_models')
+            
+        # Generate filename based on architecture and parameters
+        num_samples = len(self.all_stolen_inputs)
+        filename = f"stolen_models/attacker_surrogate_{architecture_choice}_{num_samples}samples.pt"
+        
+        # Save the model state dict
+        torch.save(self.surrogate_model.state_dict(), filename)
+        
+        print(f"\nATTACKER'S MODEL SAVED.")
+        print(f"Saved to: {filename}")
+        print(f"Architecture: {architecture_choice}")
+        print(f"Training samples used: {num_samples}")
+        
+        return filename
+    
+    def load_surrogate_model(self, model_path, architecture_choice):
+        """
+        Load a previously saved surrogate model
+        """
+        # Create model with specified architecture
+        self.surrogate_model = AttackerSurrogateModel(architecture_choice)
+        
+        # Load trained weights
+        self.surrogate_model.load_state_dict(torch.load(model_path))
+        self.surrogate_model.eval()
+        
+        print(f"Loaded surrogate model from: {model_path}")
+        print(f"Architecture: {architecture_choice}")
+        
+        return self.surrogate_model
 
 def demonstrate_realistic_attack():
     """
@@ -305,7 +347,7 @@ def demonstrate_realistic_attack():
     print("REALISTIC MODEL EXTRACTION ATTACK SIMULATION")
     print("=" * 60)
     print("Bank has proprietary check processing model")
-    print("Attacker only has API access - no architecture knowledge!")
+    print("Attacker only has API access - no architecture knowledge.")
     print("=" * 60)
     
     # Initialize attacker
@@ -325,12 +367,28 @@ def demonstrate_realistic_attack():
     print("   - Train surrogate using the bank's inference API responses")
     
     # Execute attack
-    attacker.collect_training_data(num_samples=1000)  # Small for demo
+    attacker.collect_training_data(num_samples=1000)
     attacker.train_surrogate_model(architecture_choice="simple_cnn")
     
-    print(f"\nATTACK COMPLETED!")
+    print(f"\nATTACK COMPLETED.")
     print("Attacker now has a working surrogate model")
     print("(without ever seeing the bank's architecture)")
+    
+    # Demonstrate loading the saved model
+    print(f"\n" + "="*50)
+    print("DEMONSTRATING MODEL PERSISTENCE:")
+    print("="*50)
+    
+    # Create a new attacker instance to show loading works
+    new_attacker = ModelExtractionAttacker()
+    latest_model = "stolen_models/attacker_surrogate_simple_cnn_1000samples.pt"
+    
+    try:
+        new_attacker.load_surrogate_model(latest_model, "simple_cnn")
+        print("Successfully loaded previously trained surrogate model")
+        print("Attacker's model has been created.")
+    except FileNotFoundError:
+        print("Model file not found - this is normal if running for the first time")
 
 if __name__ == "__main__":
     demonstrate_realistic_attack()
