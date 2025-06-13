@@ -5,6 +5,7 @@ import torchvision
 import torchvision.transforms as transforms
 import numpy as np
 import os
+import time  # Added for timing functionality
 
 # ==========================================
 # TARGET MODEL (BANK'S Hand-Written Recognition SYSTEM) (mnist_cnn.pt)
@@ -190,6 +191,9 @@ class ModelExtractionAttacker:
         self.stolen_inputs = []
         self.stolen_outputs = []
         
+        # Timer tracking
+        self.timing_results = {}
+        
     def query_bank_api(self, images):
         """
         Attacker query using the inference API of the target model
@@ -220,6 +224,9 @@ class ModelExtractionAttacker:
         """
         print(f"\nATTACKER: Collecting {num_samples} input-output pairs")
         print("Using only black-box API access to bank's system")
+        
+        # Start timing data collection
+        data_collection_start = time.time()
         
         # Load diverse input samples
         transform = transforms.Compose([
@@ -261,7 +268,12 @@ class ModelExtractionAttacker:
         self.all_stolen_inputs = torch.cat(self.stolen_inputs, dim=0)
         self.all_stolen_outputs = torch.cat(self.stolen_outputs, dim=0)
         
+        # End timing data collection
+        data_collection_end = time.time()
+        self.timing_results['data_collection_time'] = data_collection_end - data_collection_start
+        
         print(f"Collected {len(self.all_stolen_inputs)} input-output pairs")
+        print(f"Data collection time: {self.timing_results['data_collection_time']:.2f} seconds")
         
     def train_surrogate_model(self, architecture_choice="simple_cnn"):
         """
@@ -271,8 +283,22 @@ class ModelExtractionAttacker:
         print(f"Chosen architecture: {architecture_choice}")
         print("Attacker doesn't know if this matches the bank's architecture.")
         
+        # Start timing surrogate model creation and training
+        surrogate_start_time = time.time()
+        
+        # Start timing model creation specifically
+        model_creation_start = time.time()
+        
         # Create surrogate model with attacker's chosen architecture
         self.surrogate_model = AttackerSurrogateModel(architecture_choice)
+        
+        model_creation_end = time.time()
+        model_creation_time = model_creation_end - model_creation_start
+        
+        print(f"Surrogate model creation time: {model_creation_time:.4f} seconds")
+        
+        # Start timing training specifically
+        training_start = time.time()
         
         # Train using stolen data
         optimizer = torch.optim.Adam(self.surrogate_model.parameters(), lr=0.001)
@@ -285,6 +311,7 @@ class ModelExtractionAttacker:
         # Training loop
         self.surrogate_model.train()
         for epoch in range(10):
+            epoch_start = time.time()
             epoch_loss = 0
             for batch_inputs, batch_targets in dataloader:
                 optimizer.zero_grad()
@@ -294,10 +321,28 @@ class ModelExtractionAttacker:
                 optimizer.step()
                 epoch_loss += loss.item()
             
-            print(f"Epoch {epoch+1}/10, Loss: {epoch_loss/len(dataloader):.4f}")
+            epoch_end = time.time()
+            epoch_time = epoch_end - epoch_start
+            print(f"Epoch {epoch+1}/10, Loss: {epoch_loss/len(dataloader):.4f}, Time: {epoch_time:.2f}s")
+        
+        # End timing training
+        training_end = time.time()
+        training_time = training_end - training_start
+        
+        # End timing overall surrogate model process
+        surrogate_end_time = time.time()
+        total_surrogate_time = surrogate_end_time - surrogate_start_time
+        
+        # Store timing results
+        self.timing_results['model_creation_time'] = model_creation_time
+        self.timing_results['training_time'] = training_time
+        self.timing_results['total_surrogate_time'] = total_surrogate_time
         
         self.surrogate_model.eval()
         print("Surrogate model training completed.")
+        print(f"Total surrogate model process time: {total_surrogate_time:.2f} seconds")
+        print(f"  - Model creation: {model_creation_time:.4f} seconds")
+        print(f"  - Training: {training_time:.2f} seconds")
         
         # NEW: Save the attacker's trained surrogate model
         self.save_surrogate_model(architecture_choice)
@@ -328,6 +373,9 @@ class ModelExtractionAttacker:
         """
         Load a previously saved surrogate model
         """
+        # Time the model loading process
+        load_start = time.time()
+        
         # Create model with specified architecture
         self.surrogate_model = AttackerSurrogateModel(architecture_choice)
         
@@ -335,20 +383,57 @@ class ModelExtractionAttacker:
         self.surrogate_model.load_state_dict(torch.load(model_path))
         self.surrogate_model.eval()
         
+        load_end = time.time()
+        load_time = load_end - load_start
+        
         print(f"Loaded surrogate model from: {model_path}")
         print(f"Architecture: {architecture_choice}")
+        print(f"Model loading time: {load_time:.4f} seconds")
         
         return self.surrogate_model
+    
+    def print_timing_summary(self):
+        """
+        Print a comprehensive summary of all timing results
+        """
+        print(f"\n" + "="*60)
+        print("ATTACK TIMING SUMMARY")
+        print("="*60)
+        
+        if hasattr(self, 'timing_results') and self.timing_results:
+            total_attack_time = sum(self.timing_results.values())
+            
+            print(f"Data Collection Time:      {self.timing_results.get('data_collection_time', 0):.2f} seconds")
+            print(f"Model Creation Time:       {self.timing_results.get('model_creation_time', 0):.4f} seconds")
+            print(f"Model Training Time:       {self.timing_results.get('training_time', 0):.2f} seconds")
+            print(f"Total Surrogate Process:   {self.timing_results.get('total_surrogate_time', 0):.2f} seconds")
+            print("-" * 60)
+            print(f"TOTAL ATTACK TIME:         {total_attack_time:.2f} seconds")
+            print(f"TOTAL ATTACK TIME:         {total_attack_time/60:.2f} minutes")
+            
+            # Calculate percentages
+            if total_attack_time > 0:
+                data_pct = (self.timing_results.get('data_collection_time', 0) / total_attack_time) * 100
+                surrogate_pct = (self.timing_results.get('total_surrogate_time', 0) / total_attack_time) * 100
+                
+                print(f"\nTime Distribution:")
+                print(f"  Data Collection: {data_pct:.1f}%")
+                print(f"  Surrogate Model: {surrogate_pct:.1f}%")
+        else:
+            print("No timing data available")
 
 def demonstrate_realistic_attack():
     """
-    Demonstrate the realistic attack scenario
+    Demonstrate the realistic attack scenario with timing
     """
-    print("REALISTIC MODEL EXTRACTION ATTACK SIMULATION")
-    print("=" * 60)
+    print("REALISTIC MODEL EXTRACTION ATTACK SIMULATION WITH TIMING")
+    print("=" * 70)
     print("Bank has proprietary check processing model")
     print("Attacker only has API access - no architecture knowledge.")
-    print("=" * 60)
+    print("=" * 70)
+    
+    # Start total attack timer
+    total_attack_start = time.time()
     
     # Initialize attacker
     attacker = ModelExtractionAttacker()
@@ -366,13 +451,22 @@ def demonstrate_realistic_attack():
     print("   - Choose their own architecture for surrogate")
     print("   - Train surrogate using the bank's inference API responses")
     
-    # Execute attack
+    # Execute attack with timing
     attacker.collect_training_data(num_samples=1000)
     attacker.train_surrogate_model(architecture_choice="simple_cnn")
+    
+    # End total attack timer
+    total_attack_end = time.time()
+    total_attack_duration = total_attack_end - total_attack_start
+    print("total_attack_duration")
+    print(total_attack_duration)
     
     print(f"\nATTACK COMPLETED.")
     print("Attacker now has a working surrogate model")
     print("(without ever seeing the bank's architecture)")
+    
+    # Print comprehensive timing summary
+    attacker.print_timing_summary()
     
     # Demonstrate loading the saved model
     print(f"\n" + "="*50)
