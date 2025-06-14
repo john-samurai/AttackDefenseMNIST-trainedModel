@@ -276,13 +276,6 @@ class ModelExtractionAttacker:
         print(f"Data collection time: {self.timing_results['data_collection_time']:.2f} seconds")
         
     def train_surrogate_model(self, architecture_choice="simple_cnn"):
-        """
-        Phase 4: Train surrogate model with attacker's chosen architecture
-        """
-        print(f"\nATTACKER: Training surrogate model...")
-        print(f"Chosen architecture: {architecture_choice}")
-        print("Attacker doesn't know if this matches the bank's architecture.")
-        
         # Start timing surrogate model creation and training
         surrogate_start_time = time.time()
         
