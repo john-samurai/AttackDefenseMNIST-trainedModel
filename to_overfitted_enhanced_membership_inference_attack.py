@@ -13,102 +13,90 @@ torch.manual_seed(42)
 np.random.seed(42)
 random.seed(42)
 
-class OverfittedTargetModel(nn.Module):
+class MinimalOverfitModel(nn.Module):
     """
-    Target model architecture (LeNet-style) that matches the overfitted model
-    This simulates the bank's overfitted check processing model
+    Target model architecture that matches your saved model
+    This is the EXACT same architecture you used to create the overfitted model
     """
     def __init__(self):
-        super(OverfittedTargetModel, self).__init__()
-        self.conv1 = nn.Conv2d(1, 6, 3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(6, 16, 5, stride=1, padding=0)
-        # Note: No dropout layers in the overfitted model
-        self.fc1 = nn.Linear(400, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, 10)
+        super(MinimalOverfitModel, self).__init__()
+        # Extremely simple model - just one conv layer and FC layers
+        self.conv1 = nn.Conv2d(1, 8, 5, stride=2, padding=2)  # 28->14
+        # After conv1: 28x28 -> 14x14, after maxpool: 7x7
+        # So: 8 * 7 * 7 = 392
+        self.fc1 = nn.Linear(8 * 7 * 7, 50)
+        self.fc2 = nn.Linear(50, 10)
 
     def forward(self, x):
         x = self.conv1(x)
         x = F.relu(x)
-        x = F.max_pool2d(x, 2)
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2)
-        # No dropout during forward pass
+        x = F.max_pool2d(x, 2)  # 14->7
         x = torch.flatten(x, 1)
         x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
-        x = F.relu(x)
-        x = self.fc3(x)
         output = F.log_softmax(x, dim=1)
         return output
 
 class ShadowModel(nn.Module):
     """
-    Shadow model with similar architecture to target model
+    Shadow model with similar but slightly different architecture
     Used to simulate target model behavior for generating attack training data
     """
     def __init__(self):
         super(ShadowModel, self).__init__()
-        self.conv1 = nn.Conv2d(1, 8, 3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(8, 16, 5, stride=1, padding=0)
-        # Slightly different architecture for shadow model
-        self.fc1 = nn.Linear(400, 100)
-        self.fc2 = nn.Linear(100, 64)
-        self.fc3 = nn.Linear(64, 10)
+        # Similar but different architecture for shadow model
+        self.conv1 = nn.Conv2d(1, 6, 5, stride=2, padding=2)  # Different number of filters
+        self.fc1 = nn.Linear(6 * 7 * 7, 40)  # Different size
+        self.fc2 = nn.Linear(40, 10)
 
     def forward(self, x):
         x = self.conv1(x)
-        x = F.relu(x)
-        x = F.max_pool2d(x, 2)
-        x = self.conv2(x)
         x = F.relu(x)
         x = F.max_pool2d(x, 2)
         x = torch.flatten(x, 1)
         x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
-        x = F.relu(x)
-        x = self.fc3(x)
         output = F.log_softmax(x, dim=1)
         return output
 
-class AttackModel(nn.Module):
+class ImprovedAttackModel(nn.Module):
     """
-    Binary classifier to perform membership inference
-    Input: confidence scores from target/shadow models (10 features)
-    Output: membership probability (member=1, non-member=0)
+    Improved binary classifier to perform membership inference
+    Uses multiple features from confidence scores
     """
-    def __init__(self, input_size=10):
-        super(AttackModel, self).__init__()
-        self.fc1 = nn.Linear(input_size, 64)
-        self.fc2 = nn.Linear(64, 32)
-        self.fc3 = nn.Linear(32, 1)
-        self.dropout = nn.Dropout(0.5)
+    def __init__(self, input_size=13):  # Increased feature size
+        super(ImprovedAttackModel, self).__init__()
+        self.fc1 = nn.Linear(input_size, 128)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 32)
+        self.fc4 = nn.Linear(32, 1)
+        self.dropout = nn.Dropout(0.3)
         
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = self.dropout(x)
         x = F.relu(self.fc2(x))
         x = self.dropout(x)
-        x = torch.sigmoid(self.fc3(x))
+        x = F.relu(self.fc3(x))
+        x = self.dropout(x)
+        x = torch.sigmoid(self.fc4(x))
         return x
 
-class OverfittedMembershipInferenceAttack:
+class ImprovedMembershipInferenceAttack:
     """
-    Enhanced class implementing the membership inference attack specifically for overfitted models
+    Improved membership inference attack with better feature engineering
     """
     def __init__(self, device='cpu'):
         self.device = device
         self.target_model = None
         self.shadow_models = []
-        self.attack_model = AttackModel()
+        self.attack_model = ImprovedAttackModel()
         
-        # Load MNIST dataset
+        # Use simpler transform to match your overfitted model (NO normalization)
         self.transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,))
+            transforms.ToTensor()
         ])
         
         # Store training data indices used by the overfitted model
@@ -121,38 +109,94 @@ class OverfittedMembershipInferenceAttack:
             'inference_time': 0
         }
         
+    def extract_enhanced_features(self, model_output, target_label=None):
+        """
+        Extract enhanced features from model output for better attack performance
+        FIXED: Handle potential shape issues
+        """
+        # Convert log probabilities to probabilities
+        probs = torch.exp(model_output)
+        
+        # Ensure we have the right shape [batch_size, num_classes]
+        if probs.dim() == 1:
+            probs = probs.unsqueeze(0)  # Add batch dimension if missing
+        
+        # Handle single sample case
+        if probs.shape[0] == 1:
+            probs = probs.squeeze(0)  # Remove batch dimension for processing
+        
+        # Ensure we have exactly 10 classes (MNIST)
+        if probs.shape[-1] != 10:
+            print(f"Warning: Expected 10 classes, got {probs.shape[-1]}")
+            # Pad or truncate to 10 classes
+            if probs.shape[-1] < 10:
+                padding = torch.zeros(10 - probs.shape[-1])
+                probs = torch.cat([probs, padding])
+            else:
+                probs = probs[:10]
+        
+        # Basic confidence scores (10 features)
+        confidence_scores = probs.cpu().numpy().flatten()
+        
+        # Additional features
+        max_confidence = torch.max(probs).item()
+        entropy = -torch.sum(probs * torch.log(probs + 1e-8)).item()
+        
+        # Top-2 difference (difference between highest and second highest probability)
+        # FIXED: Handle case where there might be fewer than 2 values
+        if len(probs) >= 2:
+            top2_values, _ = torch.topk(probs, 2)
+            top2_diff = (top2_values[0] - top2_values[1]).item()
+        else:
+            # If only one class, set difference to the confidence score itself
+            top2_diff = max_confidence
+        
+        # Combine all features
+        enhanced_features = np.concatenate([
+            confidence_scores,  # 10 features
+            [max_confidence],   # 1 feature
+            [entropy],          # 1 feature  
+            [top2_diff]         # 1 feature
+        ])
+        
+        return enhanced_features
+        
     def load_overfitted_target_model(self, model_path="mnist_cnn_overfitted.pt"):
         """Load the pre-trained overfitted target model"""
         print("Loading overfitted target model...")
-        self.target_model = OverfittedTargetModel()
+        self.target_model = MinimalOverfitModel()  # Use the CORRECT architecture
         try:
             self.target_model.load_state_dict(torch.load(model_path, map_location=self.device))
             self.target_model.eval()
             print("Overfitted target model loaded successfully!")
+            print(f"Model architecture: {self.target_model}")
+            
+            # Test the model with a dummy input to verify it works
+            with torch.no_grad():
+                dummy_input = torch.randn(1, 1, 28, 28)
+                output = self.target_model(dummy_input)
+                print(f"Test output shape: {output.shape}")
+                print(f"Test output (log probabilities): {output}")
+                
             return True
         except Exception as e:
             print(f"Error loading overfitted target model: {e}")
             print("Please ensure mnist_cnn_overfitted.pt exists in the current directory")
             return False
     
-    def get_overfitted_training_data(self, train_size_percentage=0.1):
+    def get_overfitted_training_data(self, train_size=50):
         """
         Recreate the training data subset used by the overfitted model
-        This simulates knowing which data was used for training (realistic in some scenarios)
+        Updated to match your actual training setup (50 samples, not percentage)
         """
-        print(f"Recreating overfitted model training data (using {train_size_percentage*100}% of MNIST)...")
+        print(f"Recreating overfitted model training data (using {train_size} samples)...")
         
         # Load full MNIST training dataset
         full_dataset = datasets.MNIST('./data', train=True, download=True, transform=self.transform)
         
-        # Recreate the same random split used by the overfitted model
-        # Use the same random seed to get the exact same split
-        torch.manual_seed(42)  # Same seed as used in a3_mnist_overfitted.py
-        
-        train_size = int(train_size_percentage * len(full_dataset))
+        # Recreate the EXACT same random split used by the overfitted model
+        torch.manual_seed(42)
         unused_size = len(full_dataset) - train_size
-        
-        # Get the same subset that was used for training the overfitted model
         train_subset, _ = torch.utils.data.random_split(full_dataset, [train_size, unused_size])
         
         # Extract the indices
@@ -161,23 +205,19 @@ class OverfittedMembershipInferenceAttack:
         print(f"Identified {len(self.target_training_indices)} samples used in overfitted model training")
         return train_subset
     
-    def prepare_shadow_data(self, num_models=3, samples_per_model=1000):
+    def prepare_shadow_data(self, num_models=5, samples_per_model=100):  # Smaller to match your setup
         """
-        Step 1: Shadow Dataset Collection and Preparation
-        Create shadow datasets from MNIST for training shadow models
+        Prepare shadow datasets - use smaller datasets to encourage overfitting
         """
         print(f"\nStep 1: Preparing shadow datasets for {num_models} shadow models...")
         print(f"Each shadow model will use {samples_per_model} samples")
         
-        # Load full MNIST dataset
         full_dataset = datasets.MNIST('./data', train=True, download=True, transform=self.transform)
         
         shadow_datasets = []
         
         for i in range(num_models):
-            # Create random subset for each shadow model
-            # Use different random seeds for each shadow model
-            torch.manual_seed(42 + i + 100)  # Different from target model seed
+            torch.manual_seed(42 + i + 200)
             indices = torch.randperm(len(full_dataset))[:samples_per_model]
             shadow_data = torch.utils.data.Subset(full_dataset, indices)
             shadow_datasets.append(shadow_data)
@@ -187,8 +227,7 @@ class OverfittedMembershipInferenceAttack:
     
     def train_shadow_models(self, shadow_datasets):
         """
-        Step 2: Shadow Model Training
-        Train multiple shadow models to simulate target model behavior
+        Train shadow models to be highly overfitted
         """
         print(f"\nStep 2: Training {len(shadow_datasets)} shadow models...")
         start_time = time.time()
@@ -198,20 +237,20 @@ class OverfittedMembershipInferenceAttack:
         for i, shadow_data in enumerate(shadow_datasets):
             print(f"\nTraining Shadow Model {i+1}...")
             
-            # Split shadow data into train/test for member/non-member labels
-            train_size = int(0.5 * len(shadow_data))
+            # Use very small training set to encourage overfitting
+            train_size = int(0.5 * len(shadow_data))  # 50% for training
             test_size = len(shadow_data) - train_size
             train_data, test_data = torch.utils.data.random_split(shadow_data, [train_size, test_size])
             
-            train_loader = torch.utils.data.DataLoader(train_data, batch_size=32, shuffle=True)
+            train_loader = torch.utils.data.DataLoader(train_data, batch_size=1, shuffle=True)  # Batch size 1
             
             # Initialize shadow model
             shadow_model = ShadowModel().to(self.device)
-            optimizer = optim.Adam(shadow_model.parameters(), lr=0.001)
+            optimizer = optim.Adam(shadow_model.parameters(), lr=0.001)  # Start with Adam like your model
             
-            # Train shadow model to be overfitted (similar to target)
+            # Train shadow model to be overfitted
             shadow_model.train()
-            for epoch in range(15):  # More epochs to encourage overfitting
+            for epoch in range(100):  # More epochs
                 epoch_loss = 0
                 for batch_idx, (data, target) in enumerate(train_loader):
                     data, target = data.to(self.device), target.to(self.device)
@@ -222,9 +261,27 @@ class OverfittedMembershipInferenceAttack:
                     optimizer.step()
                     epoch_loss += loss.item()
                 
-                if epoch % 5 == 0:
+                if epoch % 20 == 0:
                     avg_loss = epoch_loss / len(train_loader)
-                    print(f"  Epoch {epoch+1}/15, Average Loss: {avg_loss:.4f}")
+                    
+                    # Calculate training accuracy
+                    shadow_model.eval()
+                    train_correct = 0
+                    with torch.no_grad():
+                        for data, target in train_loader:
+                            data, target = data.to(self.device), target.to(self.device)
+                            output = shadow_model(data)
+                            pred = output.argmax(dim=1, keepdim=True)
+                            train_correct += pred.eq(target.view_as(pred)).sum().item()
+                    train_acc = 100. * train_correct / len(train_data)
+                    
+                    print(f"  Epoch {epoch+1}/100, Loss: {avg_loss:.4f}, Train Acc: {train_acc:.2f}%")
+                    shadow_model.train()
+                    
+                    # Early stopping if overfitting achieved
+                    if train_acc > 90:
+                        print(f"  Shadow model {i+1} achieved good overfitting, stopping early")
+                        break
             
             shadow_model.eval()
             self.shadow_models.append((shadow_model, train_data, test_data))
@@ -232,10 +289,10 @@ class OverfittedMembershipInferenceAttack:
         self.timing_stats['shadow_training_time'] = time.time() - start_time
         print(f"Shadow models training completed in {self.timing_stats['shadow_training_time']:.2f} seconds!")
     
-    def generate_attack_training_data(self, samples_per_class=300):
+    def generate_attack_training_data(self, samples_per_class=200):  # Reduced samples
         """
-        Step 3: Generate training data for attack model using shadow models
-        Creates member/non-member confidence score pairs
+        Generate training data using enhanced features
+        FIXED: Better error handling for model outputs
         """
         print(f"\nStep 3: Generating attack model training data...")
         print(f"Using {samples_per_class} samples per class (member/non-member) per shadow model")
@@ -257,11 +314,20 @@ class OverfittedMembershipInferenceAttack:
                     
                     data = data.to(self.device)
                     output = shadow_model(data)
-                    confidence_scores = torch.exp(output).cpu().numpy().flatten()
                     
-                    attack_features.append(confidence_scores)
-                    attack_labels.append(1)  # Member
-                    member_count += 1
+                    # Debug: Print output shape for first few samples
+                    if member_count < 3:
+                        print(f"  Member sample {member_count}: output shape = {output.shape}")
+                    
+                    # Use enhanced features with better error handling
+                    try:
+                        enhanced_features = self.extract_enhanced_features(output)
+                        attack_features.append(enhanced_features)
+                        attack_labels.append(1)  # Member
+                        member_count += 1
+                    except Exception as e:
+                        print(f"  Warning: Error processing member sample {member_count}: {e}")
+                        continue
             
             # Generate non-member samples (from test data)
             test_loader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=True)
@@ -274,25 +340,38 @@ class OverfittedMembershipInferenceAttack:
                     
                     data = data.to(self.device)
                     output = shadow_model(data)
-                    confidence_scores = torch.exp(output).cpu().numpy().flatten()
                     
-                    attack_features.append(confidence_scores)
-                    attack_labels.append(0)  # Non-member
-                    nonmember_count += 1
+                    # Debug: Print output shape for first few samples
+                    if nonmember_count < 3:
+                        print(f"  Non-member sample {nonmember_count}: output shape = {output.shape}")
+                    
+                    # Use enhanced features with better error handling
+                    try:
+                        enhanced_features = self.extract_enhanced_features(output)
+                        attack_features.append(enhanced_features)
+                        attack_labels.append(0)  # Non-member
+                        nonmember_count += 1
+                    except Exception as e:
+                        print(f"  Warning: Error processing non-member sample {nonmember_count}: {e}")
+                        continue
+        
+        if len(attack_features) == 0:
+            raise ValueError("No attack features generated! Check shadow model outputs.")
         
         attack_features = np.array(attack_features)
         attack_labels = np.array(attack_labels)
         
         print(f"Generated {len(attack_features)} training samples for attack model")
+        print(f"Feature dimension: {attack_features.shape[1]}")
         print(f"Members: {np.sum(attack_labels)}, Non-members: {len(attack_labels) - np.sum(attack_labels)}")
         
         return attack_features, attack_labels
     
     def train_attack_model(self, attack_features, attack_labels):
         """
-        Step 3 (continued): Train the attack model for membership inference
+        Train the improved attack model
         """
-        print("\nTraining Attack Model...")
+        print("\nStep 4: Training Attack Model...")
         start_time = time.time()
         
         # Convert to tensors
@@ -309,16 +388,19 @@ class OverfittedMembershipInferenceAttack:
         
         # Create data loaders
         train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
         
         # Initialize attack model
-        self.attack_model = AttackModel().to(self.device)
-        optimizer = optim.Adam(self.attack_model.parameters(), lr=0.001)
+        self.attack_model = ImprovedAttackModel(input_size=attack_features.shape[1]).to(self.device)
+        optimizer = optim.Adam(self.attack_model.parameters(), lr=0.001, weight_decay=1e-4)
         criterion = nn.BCELoss()
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.5)
         
         # Train attack model
         self.attack_model.train()
-        for epoch in range(50):
+        best_val_acc = 0
+        
+        for epoch in range(100):  # More epochs
             epoch_loss = 0
             for features, labels in train_loader:
                 optimizer.zero_grad()
@@ -328,6 +410,8 @@ class OverfittedMembershipInferenceAttack:
                 optimizer.step()
                 epoch_loss += loss.item()
             
+            scheduler.step()
+            
             # Validation
             if epoch % 10 == 0:
                 self.attack_model.eval()
@@ -335,18 +419,22 @@ class OverfittedMembershipInferenceAttack:
                     val_predictions = self.attack_model(X_val)
                     val_loss = criterion(val_predictions, y_val)
                     val_accuracy = ((val_predictions > 0.5).float() == y_val).float().mean()
-                    print(f"Epoch {epoch+1}/50 - Train Loss: {epoch_loss/len(train_loader):.4f}, "
+                    
+                    if val_accuracy > best_val_acc:
+                        best_val_acc = val_accuracy
+                    
+                    print(f"Epoch {epoch+1}/100 - Train Loss: {epoch_loss/len(train_loader):.4f}, "
                           f"Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f}")
                 self.attack_model.train()
         
         self.attack_model.eval()
         self.timing_stats['attack_training_time'] = time.time() - start_time
         print(f"Attack model training completed in {self.timing_stats['attack_training_time']:.2f} seconds!")
+        print(f"Best validation accuracy: {best_val_acc:.4f}")
     
-    def create_membership_test_set(self, num_members=500, num_non_members=500):
+    def create_membership_test_set(self, num_members=25, num_non_members=25):  # Smaller test set
         """
         Create a test set with known membership labels for evaluation
-        This uses knowledge of which samples were in the overfitted model's training set
         """
         print(f"\nCreating membership test set...")
         print(f"Members: {num_members}, Non-members: {num_non_members}")
@@ -360,30 +448,22 @@ class OverfittedMembershipInferenceAttack:
         
         # Create member samples (from training set)
         member_indices = list(self.target_training_indices)[:num_members]
-        member_samples = torch.utils.data.Subset(full_dataset, member_indices)
-        member_labels = [1] * len(member_indices)  # 1 = member
+        member_samples = []
+        for idx in member_indices:
+            data, _ = full_dataset[idx]
+            member_samples.append(data)
         
         # Create non-member samples (from remaining data)
         all_indices = set(range(len(full_dataset)))
         non_member_indices = list(all_indices - self.target_training_indices)[:num_non_members]
-        non_member_samples = torch.utils.data.Subset(full_dataset, non_member_indices)
-        non_member_labels = [0] * len(non_member_indices)  # 0 = non-member
+        non_member_samples = []
+        for idx in non_member_indices:
+            data, _ = full_dataset[idx]
+            non_member_samples.append(data)
         
         # Combine samples and labels
-        combined_samples = []
-        combined_labels = []
-        
-        # Add member samples
-        for i in range(len(member_samples)):
-            data, _ = member_samples[i]
-            combined_samples.append(data)
-            combined_labels.append(1)
-        
-        # Add non-member samples
-        for i in range(len(non_member_samples)):
-            data, _ = non_member_samples[i]
-            combined_samples.append(data)
-            combined_labels.append(0)
+        combined_samples = member_samples + non_member_samples
+        combined_labels = [1] * len(member_samples) + [0] * len(non_member_samples)
         
         print(f"Created test set with {len(combined_samples)} samples")
         print(f"Actual members: {sum(combined_labels)}, Actual non-members: {len(combined_labels) - sum(combined_labels)}")
@@ -392,28 +472,39 @@ class OverfittedMembershipInferenceAttack:
     
     def perform_membership_inference(self, test_samples, true_membership_labels, target_name="Overfitted Target Model"):
         """
-        Step 4: Perform membership inference attack on overfitted target model
+        Perform membership inference attack using enhanced features
         """
-        print(f"\nStep 4: Performing membership inference attack on {target_name}...")
+        print(f"\nStep 5: Performing membership inference attack on {target_name}...")
         start_time = time.time()
         
-        # Get confidence scores from target model
         predicted_memberships = []
         confidence_scores_list = []
         
         with torch.no_grad():
-            for data in test_samples:
-                data = data.unsqueeze(0).to(self.device)  # Add batch dimension
+            for i, data in enumerate(test_samples):
+                data = data.unsqueeze(0).to(self.device)
                 
-                # Get target model confidence scores
+                # Get target model output
                 target_output = self.target_model(data)
-                confidence_scores = torch.exp(target_output).cpu().numpy().flatten()
-                confidence_scores_list.append(confidence_scores)
                 
-                # Use attack model to predict membership
-                attack_input = torch.FloatTensor(confidence_scores).unsqueeze(0).to(self.device)
-                membership_prob = self.attack_model(attack_input).item()
-                predicted_memberships.append(membership_prob)
+                # Debug: Print shape for first few samples
+                if i < 3:
+                    print(f"  Test sample {i}: target output shape = {target_output.shape}")
+                
+                # Extract enhanced features
+                try:
+                    enhanced_features = self.extract_enhanced_features(target_output)
+                    confidence_scores_list.append(enhanced_features[:10])  # Store original confidence scores
+                    
+                    # Use attack model to predict membership
+                    attack_input = torch.FloatTensor(enhanced_features).unsqueeze(0).to(self.device)
+                    membership_prob = self.attack_model(attack_input).item()
+                    predicted_memberships.append(membership_prob)
+                except Exception as e:
+                    print(f"  Warning: Error processing test sample {i}: {e}")
+                    # Use random prediction as fallback
+                    predicted_memberships.append(0.5)
+                    confidence_scores_list.append([0.1] * 10)
         
         # Convert predictions to binary (threshold = 0.5)
         binary_predictions = [1 if prob > 0.5 else 0 for prob in predicted_memberships]
@@ -444,9 +535,11 @@ class OverfittedMembershipInferenceAttack:
         non_member_probs = [predicted_memberships[i] for i in range(len(predicted_memberships)) 
                            if true_membership_labels[i] == 0]
         
-        print(f"\nPrediction Probability Analysis:")
-        print(f"Member samples - Mean prob: {np.mean(member_probs):.4f}, Std: {np.std(member_probs):.4f}")
-        print(f"Non-member samples - Mean prob: {np.mean(non_member_probs):.4f}, Std: {np.std(non_member_probs):.4f}")
+        if len(member_probs) > 0 and len(non_member_probs) > 0:
+            print(f"\nPrediction Probability Analysis:")
+            print(f"Member samples - Mean prob: {np.mean(member_probs):.4f}, Std: {np.std(member_probs):.4f}")
+            print(f"Non-member samples - Mean prob: {np.mean(non_member_probs):.4f}, Std: {np.std(non_member_probs):.4f}")
+            print(f"Probability difference: {np.mean(member_probs) - np.mean(non_member_probs):.4f}")
         
         return {
             'accuracy': accuracy,
@@ -455,13 +548,13 @@ class OverfittedMembershipInferenceAttack:
             'confidence_scores': confidence_scores_list
         }
     
-    def evaluate_overfitted_attack(self, num_shadow_models=3, samples_per_shadow_model=1000, 
-                                  samples_per_class=300):
+    def evaluate_overfitted_attack(self, num_shadow_models=3, samples_per_shadow_model=100, 
+                                  samples_per_class=200):
         """
         Comprehensive evaluation of the membership inference attack against overfitted model
         """
         print("\n" + "="*70)
-        print("MEMBERSHIP INFERENCE ATTACK ON OVERFITTED MODEL")
+        print("IMPROVED MEMBERSHIP INFERENCE ATTACK ON OVERFITTED MODEL")
         print("="*70)
         print(f"Configuration:")
         print(f"- Number of shadow models: {num_shadow_models}")
@@ -474,8 +567,8 @@ class OverfittedMembershipInferenceAttack:
             print("Failed to load overfitted target model. Exiting...")
             return None
         
-        # Step 2: Get the training data used by overfitted model
-        self.get_overfitted_training_data(train_size_percentage=0.1)
+        # Step 2: Get the training data used by overfitted model (50 samples)
+        self.get_overfitted_training_data(train_size=50)
         
         # Step 3: Prepare shadow models
         shadow_datasets = self.prepare_shadow_data(num_shadow_models, samples_per_shadow_model)
@@ -486,7 +579,7 @@ class OverfittedMembershipInferenceAttack:
         self.train_attack_model(attack_features, attack_labels)
         
         # Step 5: Create membership test set
-        test_samples, test_labels = self.create_membership_test_set(num_members=500, num_non_members=500)
+        test_samples, test_labels = self.create_membership_test_set(num_members=25, num_non_members=25)
         
         if test_samples is None:
             print("Failed to create test set. Exiting...")
@@ -506,26 +599,30 @@ class OverfittedMembershipInferenceAttack:
 
 def main():
     """
-    Main function to demonstrate the membership inference attack on overfitted model
+    Main function to demonstrate the improved membership inference attack on overfitted model
     """
     print("="*70)
-    print("MEMBERSHIP INFERENCE ATTACK ON OVERFITTED NEURAL NETWORK")
+    print("IMPROVED MEMBERSHIP INFERENCE ATTACK ON OVERFITTED NEURAL NETWORK")
     print("="*70)
-    print("This attack targets the overfitted model created by a3_mnist_overfitted.py")
-    print("The overfitting makes the model more vulnerable to membership inference.")
+    print("This improved attack targets the severely overfitted model with:")
+    print("- Enhanced feature engineering (13 features vs 10)")
+    print("- Better shadow model training (more overfitted)")
+    print("- Improved attack model architecture")
+    print("- More aggressive overfitting parameters")
+    print("- FIXED: Better error handling for model outputs")
     print("="*70)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     # Initialize attack
-    attack = OverfittedMembershipInferenceAttack(device=device)
+    attack = ImprovedMembershipInferenceAttack(device=device)
     
-    # Run the attack evaluation
+    # Run the attack evaluation with smaller parameters to match your setup
     results = attack.evaluate_overfitted_attack(
-        num_shadow_models=3,
-        samples_per_shadow_model=1000,
-        samples_per_class=300
+        num_shadow_models=3,  # Fewer shadow models
+        samples_per_shadow_model=100,  # Smaller shadow datasets
+        samples_per_class=200  # Fewer training samples per class
     )
     
     if results:
@@ -533,8 +630,15 @@ def main():
         print("ATTACK COMPLETED SUCCESSFULLY")
         print("="*70)
         print(f"Final Attack Accuracy: {results['accuracy']:.4f} ({results['accuracy']*100:.2f}%)")
-        print("The high accuracy demonstrates the vulnerability of overfitted models")
-        print("to membership inference attacks.")
+        
+        if results['accuracy'] > 0.7:
+            print("EXCELLENT: High attack accuracy demonstrates severe overfitting vulnerability!")
+        elif results['accuracy'] > 0.6:
+            print("GOOD: Moderate attack accuracy shows overfitting vulnerability.")
+        elif results['accuracy'] > 0.55:
+            print("WEAK: Low attack accuracy suggests limited overfitting.")
+        else:
+            print("FAILED: Attack accuracy near random - model may not be overfitted enough.")
     else:
         print("Attack failed. Please check that mnist_cnn_overfitted.pt exists.")
 
